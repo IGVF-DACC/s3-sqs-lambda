@@ -1,11 +1,19 @@
 import json
-
+import os
 import boto3
 
 from typing import Any, Dict, List
 
 s3_client = boto3.client("s3")
+secrets_client = boto3.client("secretsmanager")
+portal_api_url = os.getenv("PORTAL_API_URL")
+portal_secret_arn = os.getenv("PORTAL_SECRET_ARN")
 
+secret = json.loads(
+    secrets_client.get_secret_value(SecretId=portal_secret_arn)["SecretString"]
+)
+portal_key = secret["BACKEND_KEY"]
+portal_secret_key = secret["BACKEND_SECRET_KEY"]
 
 def handler(event: Dict[str, Any], context: Any) -> Dict[str, List[Dict[str, str]]]:
     """

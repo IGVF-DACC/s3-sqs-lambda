@@ -3,9 +3,10 @@ from aws_cdk import Duration, Stack
 from aws_cdk import aws_s3
 from aws_cdk import aws_sqs
 from aws_cdk import aws_lambda 
-from aws_cdk import aws_s3_notifications 
+from aws_cdk import aws_s3_notifications
+from aws_cdk import aws_secretsmanager
 from aws_cdk.aws_lambda_event_sources import SqsEventSource
-
+from s3_sqs_lambda.config import config
 LAMBDA_TIMEOUT = Duration.seconds(30)
 # AWS docs recommend visibility timeout >= 6x the Lambda timeout
 VISIBILITY_TIMEOUT = Duration.seconds(180)
@@ -16,10 +17,10 @@ class S3SqsLambdaStack(Stack):
     def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
-        bucket = aws_s3.Bucket(
-            self, 
+        bucket = aws_s3.Bucket.from_bucket_name(
+            self,
             "TaggingEventBucket",
-            bucket_name='tagging-event-test-otto',
+            bucket_name=config['bucket_name'],
         )
 
         dlq = aws_sqs.Queue(self, "TaggingEventDLQ")
@@ -46,9 +47,20 @@ class S3SqsLambdaStack(Stack):
             code=aws_lambda.Code.from_asset("lambda/tagging_handler"),
             handler="index.handler",
             timeout=LAMBDA_TIMEOUT,
+            environment={
+                "PORTAL_API_URL": config['portal_api_url'],
+                "PORTAL_SECRET_ARN": config['portal_secret_arn'],
+            },
         )
 
         bucket.grant_read(tagging_handler)
+
+        portal_secret = aws_secretsmanager.Secret.from_secret_complete_arn(
+            self,
+            "PortalSecret",
+            secret_complete_arn=config['portal_secret_arn'],
+        )
+        portal_secret.grant_read(tagging_handler)
 
         tagging_handler.add_event_source(
             SqsEventSource(
