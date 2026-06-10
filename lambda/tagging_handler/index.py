@@ -1,6 +1,7 @@
 import json
 import os
 import boto3
+import requests
 
 from typing import Any, Dict, List
 
@@ -14,6 +15,18 @@ secret = json.loads(
 )
 portal_key = secret["BACKEND_KEY"]
 portal_secret_key = secret["BACKEND_SECRET_KEY"]
+
+def get_collections(portal_url: str, portal_key: str, portal_secret_key: str) -> List[str]|None:
+    r = requests.get(portal_url, auth=(portal_key, portal_secret_key))
+    r.raise_for_status()
+    return r.json().get("collections")
+
+def resolve_collections(s3_object_collections: str, portal_collections: List[str]) -> List[str]:
+    resolved_collections = []
+    s3_object_collections = s3_object_collections.split(" ")
+    resolved_collections.extend(s3_object_collections)
+    resolved_collections.extend(portal_collections)
+    return list(set(resolved_collections))
 
 def handler(event: Dict[str, Any], context: Any) -> Dict[str, List[Dict[str, str]]]:
     """
@@ -52,6 +65,32 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, List[Dict[str, str
                 )
                 tags = response.get("TagSet", [])
                 print(f"Tags: {tags}")
+
+                portal_accession = next(
+                    (tag["Value"] for tag in tags if tag["Key"] == "portal_accession"),
+                    None,
+                )
+                if portal_accession is None:
+                    raise ValueError("No portal_accession tag found")
+
+                s3_object_collections = next(
+                    (tag["Value"] for tag in tags if tag["Key"] == "collections"),
+                    None,
+                )
+                if s3_object_collections is None:
+                    raise ValueError("No collections tag found")
+
+                portal_url = f"{portal_api_url}/{portal_accession}"
+                print(f"Portal URL: {portal_url}")
+
+                portal_collections = get_collections(portal_url, portal_key, portal_secret_key)
+
+                collections_to_patch = resolve_collections(s3_object_collections, portal_collections)
+                print(f"Collections to patch: {collections_to_patch}")
+
+                r = requests.patch(portal_url, auth=(portal_key, portal_secret_key), json={"collections": collections_to_patch})
+                r.raise_for_status()
+                print(f"Collections patched: {r.json()}")
 
         except Exception as e:
             print(f"Error processing message {message_id}: {e}")
