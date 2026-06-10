@@ -11,6 +11,7 @@
       "source.bat",
       "**/__init__.py",
       "**/__pycache__",
+      ".venv",
       "tests"
     ]
   },
@@ -75,7 +76,7 @@
     "@aws-cdk/aws-route53-patters:useCertificate": true,
     "@aws-cdk/aws-route53-targets:userPoolDomainNameMethodWithoutCustomResource": true,
     "@aws-cdk/aws-s3:createDefaultLoggingPolicy": true,
-    "@aws-cdk/aws-s3:keepNotificationInImportedBucket": false,
+    "@aws-cdk/aws-s3:keepNotificationInImportedBucket": true,
     "@aws-cdk/aws-s3:publicAccessBlockedByDefault": true,
     "@aws-cdk/aws-s3:serverAccessLogsUseBucketPolicy": true,
     "@aws-cdk/aws-s3:setUniqueReplicationRoleName": true,
