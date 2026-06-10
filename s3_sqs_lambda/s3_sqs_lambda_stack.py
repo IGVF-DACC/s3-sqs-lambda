@@ -6,6 +6,7 @@ from aws_cdk import aws_lambda
 from aws_cdk import aws_s3_notifications
 from aws_cdk import aws_secretsmanager
 from aws_cdk.aws_lambda_event_sources import SqsEventSource
+from aws_cdk.aws_lambda_python_alpha import PythonFunction
 from s3_sqs_lambda.config import config
 LAMBDA_TIMEOUT = Duration.seconds(30)
 # AWS docs recommend visibility timeout >= 6x the Lambda timeout
@@ -40,12 +41,15 @@ class S3SqsLambdaStack(Stack):
             aws_s3_notifications.SqsDestination(queue),
         )
 
-        tagging_handler = aws_lambda.Function(
+        # PythonFunction bundles dependencies from the requirements.txt inside
+        # `entry` (requires Docker at synth/deploy time).
+        tagging_handler = PythonFunction(
             self,
             "TaggingHandler",
             runtime=aws_lambda.Runtime.PYTHON_3_12,
-            code=aws_lambda.Code.from_asset("lambda/tagging_handler"),
-            handler="index.handler",
+            entry="lambda/tagging_handler",
+            index="index.py",
+            handler="handler",
             timeout=LAMBDA_TIMEOUT,
             environment={
                 "PORTAL_API_URL": config['portal_api_url'],
