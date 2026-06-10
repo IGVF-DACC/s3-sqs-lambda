@@ -70,8 +70,11 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, List[Dict[str, str
                     (tag["Value"] for tag in tags if tag["Key"] == "portal_accession"),
                     None,
                 )
+                # we might get tagging events even if the object is not in the portal
+                # we might later filter the notifications to just certain prefixes      
                 if portal_accession is None:
-                    raise ValueError("No portal_accession tag found")
+                    print("No portal_accession tag found, skipping")
+                    continue
 
                 s3_object_collections = next(
                     (tag["Value"] for tag in tags if tag["Key"] == "collections"),
