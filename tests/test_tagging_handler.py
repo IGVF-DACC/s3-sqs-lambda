@@ -77,8 +77,8 @@ def set_portal_collections(portal):
         ("", []),
     ],
 )
-def test_parse_collections_tag(tag_value, expected):
-    assert index.parse_collections_tag(tag_value) == expected
+def test_parse_tag_values(tag_value, expected):
+    assert index.parse_tag_values(tag_value) == expected
 
 
 def test_resolve_collections_returns_none_when_nothing_new():
@@ -106,7 +106,7 @@ def test_handler_skips_s3_test_event(s3, portal):
     s3.get_object_tagging.assert_not_called()
 
 
-def test_handler_skips_object_without_portal_accession(portal, set_tags):
+def test_handler_skips_object_without_portal_accessions(portal, set_tags):
     set_tags({"collections": "ENCODE"})
 
     result = index.handler(make_sqs_event(make_s3_body()), None)
@@ -116,8 +116,18 @@ def test_handler_skips_object_without_portal_accession(portal, set_tags):
     portal.patch.assert_not_called()
 
 
+def test_handler_skips_empty_portal_accessions_tag(portal, set_tags):
+    set_tags({"portal_accessions": " ", "collections": "ENCODE"})
+
+    result = index.handler(make_sqs_event(make_s3_body()), None)
+
+    assert result == {"batchItemFailures": []}
+    portal.get.assert_not_called()
+    portal.patch.assert_not_called()
+
+
 def test_handler_skips_object_without_collections_tag(portal, set_tags):
-    set_tags({"portal_accession": "IGVFFI0001AAAA"})
+    set_tags({"portal_accessions": "IGVFFI0001AAAA"})
 
     result = index.handler(make_sqs_event(make_s3_body()), None)
 
@@ -127,7 +137,7 @@ def test_handler_skips_object_without_collections_tag(portal, set_tags):
 
 
 def test_handler_skips_empty_collections_tag(portal, set_tags):
-    set_tags({"portal_accession": "IGVFFI0001AAAA", "collections": " "})
+    set_tags({"portal_accessions": "IGVFFI0001AAAA", "collections": " "})
 
     result = index.handler(make_sqs_event(make_s3_body()), None)
 
@@ -137,7 +147,7 @@ def test_handler_skips_empty_collections_tag(portal, set_tags):
 
 
 def test_handler_patches_new_collections(portal, set_tags, set_portal_collections):
-    set_tags({"portal_accession": "IGVFFI0001AAAA", "collections": "ENCODE MaveDB"})
+    set_tags({"portal_accessions": "IGVFFI0001AAAA", "collections": "ENCODE MaveDB"})
     set_portal_collections(["ENCODE"])
 
     result = index.handler(make_sqs_event(make_s3_body()), None)
@@ -152,7 +162,7 @@ def test_handler_patches_new_collections(portal, set_tags, set_portal_collection
 def test_handler_patches_first_collection_when_portal_has_none(
     portal, set_tags, set_portal_collections
 ):
-    set_tags({"portal_accession": "IGVFFI0001AAAA", "collections": "ENCODE"})
+    set_tags({"portal_accessions": "IGVFFI0001AAAA", "collections": "ENCODE"})
     set_portal_collections(None)
 
     result = index.handler(make_sqs_event(make_s3_body()), None)
@@ -161,10 +171,90 @@ def test_handler_patches_first_collection_when_portal_has_none(
     assert portal.patch.call_args.kwargs["json"] == {"collections": ["ENCODE"]}
 
 
+def test_handler_patches_every_accession(portal, set_tags, set_portal_collections):
+    set_tags(
+        {
+            "portal_accessions": "IGVFFI0001AAAA IGVFFI0002BBBB IGVFFI0003CCCC",
+            "collections": "ENCODE",
+        }
+    )
+    set_portal_collections([])
+
+    result = index.handler(make_sqs_event(make_s3_body()), None)
+
+    assert result == {"batchItemFailures": []}
+    assert portal.get.call_count == 3
+    assert portal.patch.call_count == 3
+    patched_urls = [call.args[0] for call in portal.patch.call_args_list]
+    assert patched_urls == [
+        "https://portal.example.org/IGVFFI0001AAAA",
+        "https://portal.example.org/IGVFFI0002BBBB",
+        "https://portal.example.org/IGVFFI0003CCCC",
+    ]
+    for call in portal.patch.call_args_list:
+        assert call.kwargs["json"] == {"collections": ["ENCODE"]}
+
+
+def test_handler_patches_only_accessions_missing_collections(portal, set_tags):
+    set_tags(
+        {
+            "portal_accessions": "IGVFFI0001AAAA IGVFFI0002BBBB",
+            "collections": "ENCODE",
+        }
+    )
+    portal_state = {
+        "IGVFFI0001AAAA": ["ENCODE"],
+        "IGVFFI0002BBBB": [],
+    }
+
+    def fake_get(url, **kwargs):
+        response = MagicMock()
+        accession = url.rsplit("/", 1)[1]
+        response.json.return_value = {"collections": portal_state[accession]}
+        return response
+
+    portal.get.side_effect = fake_get
+
+    result = index.handler(make_sqs_event(make_s3_body()), None)
+
+    assert result == {"batchItemFailures": []}
+    portal.patch.assert_called_once()
+    assert portal.patch.call_args.args[0].endswith("/IGVFFI0002BBBB")
+    assert portal.patch.call_args.kwargs["json"] == {"collections": ["ENCODE"]}
+
+
+def test_handler_failed_accession_does_not_block_others(portal, set_tags, capsys):
+    set_tags(
+        {
+            "portal_accessions": "IGVFFI0001AAAA IGVFFI0002BBBB",
+            "collections": "ENCODE",
+        }
+    )
+
+    def fake_get(url, **kwargs):
+        if url.endswith("/IGVFFI0001AAAA"):
+            raise RuntimeError("portal object not found")
+        response = MagicMock()
+        response.json.return_value = {"collections": []}
+        return response
+
+    portal.get.side_effect = fake_get
+
+    result = index.handler(make_sqs_event(make_s3_body()), None)
+
+    # The good accession is still patched...
+    portal.patch.assert_called_once()
+    assert portal.patch.call_args.args[0].endswith("/IGVFFI0002BBBB")
+    # ...but the message is reported failed, naming the broken accession.
+    assert result == {"batchItemFailures": [{"itemIdentifier": "message-0"}]}
+    output = capsys.readouterr().out
+    assert "Failed to sync collections for accessions: IGVFFI0001AAAA" in output
+
+
 def test_handler_no_patch_when_portal_already_has_collections(
     portal, set_tags, set_portal_collections
 ):
-    set_tags({"portal_accession": "IGVFFI0001AAAA", "collections": "ENCODE"})
+    set_tags({"portal_accessions": "IGVFFI0001AAAA", "collections": "ENCODE"})
     set_portal_collections(["MaveDB", "ENCODE"])
 
     result = index.handler(make_sqs_event(make_s3_body()), None)
@@ -194,7 +284,7 @@ def test_handler_reports_failed_message_in_batch_failures(s3, portal):
 def test_handler_one_bad_message_does_not_fail_others(
     portal, set_tags, set_portal_collections
 ):
-    set_tags({"portal_accession": "IGVFFI0001AAAA", "collections": "ENCODE"})
+    set_tags({"portal_accessions": "IGVFFI0001AAAA", "collections": "ENCODE"})
     set_portal_collections([])
     event = make_sqs_event({"not": "an s3 event"}, make_s3_body())
 

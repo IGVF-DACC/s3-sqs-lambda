@@ -26,8 +26,8 @@ def get_tag_value(tags: List[Dict[str, str]], key: str) -> Optional[str]:
     return next((tag["Value"] for tag in tags if tag["Key"] == key), None)
 
 
-def parse_collections_tag(tag_value: str) -> List[str]:
-    """Parse a space-separated collections tag value, dropping empty entries."""
+def parse_tag_values(tag_value: str) -> List[str]:
+    """Parse a space-separated tag value, dropping empty entries."""
     return tag_value.split()
 
 
@@ -57,6 +57,32 @@ def resolve_collections(
     return portal_collections + sorted(missing)
 
 
+def sync_portal_collections(
+    accession: str, s3_object_collections: List[str], auth: Tuple[str, str]
+) -> None:
+    """Patch the portal object's collections if any S3 tag collections are missing."""
+    portal_url = f"{portal_api_url}/{accession}"
+    print(f"Portal URL: {portal_url}")
+
+    portal_collections = get_portal_collections(portal_url, auth)
+
+    collections_to_patch = resolve_collections(
+        s3_object_collections, portal_collections
+    )
+    if collections_to_patch is None:
+        print(f"Portal object {accession} already has all collections, skipping")
+        return
+    print(f"Collections to patch for {accession}: {collections_to_patch}")
+
+    r = requests.patch(
+        portal_url,
+        auth=auth,
+        json={"collections": collections_to_patch},
+    )
+    r.raise_for_status()
+    print(f"Collections patched: {r.json()}")
+
+
 def process_s3_record(s3_record: Dict[str, Any]) -> None:
     bucket_name = s3_record["s3"]["bucket"]["name"]
     # Keys in S3 event notifications are URL-encoded.
@@ -76,9 +102,14 @@ def process_s3_record(s3_record: Dict[str, Any]) -> None:
 
     # We might get tagging events even if the object is not in the portal.
     # We might later filter the notifications to just certain prefixes.
-    portal_accession = get_tag_value(tags, "portal_accession")
-    if portal_accession is None:
-        print("No portal_accession tag found, skipping")
+    portal_accessions_tag = get_tag_value(tags, "portal_accessions")
+    if portal_accessions_tag is None:
+        print("No portal_accessions tag found, skipping")
+        return
+
+    portal_accessions = parse_tag_values(portal_accessions_tag)
+    if not portal_accessions:
+        print("Empty portal_accessions tag, skipping")
         return
 
     # PutObjectTagging replaces the whole tag set, so unrelated tag updates
@@ -88,32 +119,26 @@ def process_s3_record(s3_record: Dict[str, Any]) -> None:
         print("No collections tag found, skipping")
         return
 
-    s3_object_collections = parse_collections_tag(collections_tag)
+    s3_object_collections = parse_tag_values(collections_tag)
     if not s3_object_collections:
         print("Empty collections tag, skipping")
         return
 
-    portal_url = f"{portal_api_url}/{portal_accession}"
-    print(f"Portal URL: {portal_url}")
-
+    # Attempt every accession even if one fails, so a persistently broken
+    # accession cannot block the others across retries.
     auth = get_portal_auth()
-    portal_collections = get_portal_collections(portal_url, auth)
+    failed_accessions = []
+    for accession in portal_accessions:
+        try:
+            sync_portal_collections(accession, s3_object_collections, auth)
+        except Exception as e:
+            print(f"Error syncing collections for accession {accession}: {e}")
+            failed_accessions.append(accession)
 
-    collections_to_patch = resolve_collections(
-        s3_object_collections, portal_collections
-    )
-    if collections_to_patch is None:
-        print("Portal already has all collections, skipping")
-        return
-    print(f"Collections to patch: {collections_to_patch}")
-
-    r = requests.patch(
-        portal_url,
-        auth=auth,
-        json={"collections": collections_to_patch},
-    )
-    r.raise_for_status()
-    print(f"Collections patched: {r.json()}")
+    if failed_accessions:
+        raise RuntimeError(
+            f"Failed to sync collections for accessions: {', '.join(failed_accessions)}"
+        )
 
 
 def handler(event: Dict[str, Any], context: Any) -> Dict[str, List[Dict[str, str]]]:
