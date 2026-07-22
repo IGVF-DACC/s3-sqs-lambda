@@ -46,22 +46,29 @@ flowchart LR
 
 The service is driven entirely by tags on the S3 object. Two tags are used:
 
-| Tag key             | Description                                                        | Example value                     |
-| ------------------- | ------------------------------------------------------------------ | --------------------------------- |
-| `portal_accessions` | Space-separated portal accession(s) the file belongs to.           | `IGVFDS3222WCZH IGVFDS7303VUTX`   |
-| `collections`       | Space-separated collection name(s) the object should be part of.   | `variants_variants genes`         |
+| Tag key             | Description                                                        | Example value                                  |
+| ------------------- | ------------------------------------------------------------------ | ---------------------------------------------- |
+| `portal_accessions` | Space-separated portal accession(s) the file belongs to.           | `IGVFDS3222WCZH IGVFDS7303VUTX`                |
+| `collections`       | Space-separated collection name(s) the object should be part of.   | `IGVF_catalog_beta_v0.3 IGVF_catalog_v1.0`     |
+
+The `collections` values must match the `collections` enum on the portal object's
+schema (see, for example, the [`analysis_set` profile](https://api.data.igvf.org/profiles/analysis_set/)).
+Note that "collection" is overloaded in the catalog: here it refers to the portal
+`collections` property, which denotes a curated collection or catalog data
+freeze/version (e.g. `IGVF_catalog_beta_v0.3`, `IGVF_catalog_v1.0`) -- not an
+ArangoDB collection/table.
 
 For example, an object tagged with:
 
 ```
 portal_accessions = "IGVFDS3222WCZH IGVFDS7303VUTX"
-collections        = "variants_variants genes"
+collections        = "IGVF_catalog_beta_v0.3 IGVF_catalog_v1.0"
 ```
 
 will cause the service to ensure that both `IGVFDS3222WCZH` and `IGVFDS7303VUTX`
-on the portal include `variants_variants` and `genes` in their `collections`
-property. If a portal object already contains all of the tagged collections, it is
-left untouched.
+on the portal include `IGVF_catalog_beta_v0.3` and `IGVF_catalog_v1.0` in their
+`collections` property. If a portal object already contains all of the tagged
+collections, it is left untouched.
 
 Because `PutObjectTagging` replaces the entire tag set, an update that removes the
 `collections` tag (or does not include `portal_accessions`) simply results in the
